@@ -216,10 +216,15 @@ type ElementHelper(infrastructureMetamodel: InfrastructureMetamodel) =
     /// Returns underlying Infrastructure Metamodel.
     member this.InfrastructureMetamodel = infrastructureMetamodel
 
-    /// Returns a list of all attributes for an element, respecting generalization. Attributes of most special node
-    /// are the first in resulting sequence.
+    /// Returns a list of ontological attributes for an element, respecting generalization. Attributes of most special
+    /// node are the first in resulting sequence.
     /// TODO: Actually do BFS and ignore overriden attributes.
-    member this.Attributes element = allAttributes element
+    member this.Attributes (element: IElement) =
+        // Ontological attribute is an attribute that is defined in ontological metamodel, i.e. a model that is also
+        // a metamodel for element itself. Contrary is a linguistical attribute, it is defined in Infrastructure
+        // Metamodel. For metamodels which are instances of Infrastructure Metamodel there is no difference, all
+        // ontological attributes are linguistic.
+        allAttributes element |> Seq.filter (fun attr -> attr.Class.Model = element.Class.Model)
 
     /// Returns true if an attribute with given name is present in given element.
     /// TODO: Actually do BFS and stop on first matching attribute.
@@ -297,21 +302,34 @@ module private Operations =
         let defaultValue = CoreSemanticLayer.Element.attributeValue ``class`` name
         CoreSemanticLayer.Element.addAttribute element name attributeClassNode attributeAssociation defaultValue
 
-    let private addAttribute (element: IElement) (elementHelper: ElementHelper) (attributeClass: INode)  =
-        let model = CoreSemanticLayer.Element.containingModel element
-        if elementHelper.HasAttribute element attributeClass.Name then
-            let valueFromClass = CoreSemanticLayer.Element.attributeValue attributeClass "stringValue"
-            elementHelper.SetAttributeValue element attributeClass.Name valueFromClass
+    let private addAttribute (element: IElement) (elementHelper: ElementHelper) (attributeClass: INode) =
+        // TODO: Refactor this.
+        if CoreSemanticLayer.Element.isInstanceOf elementHelper.InfrastructureMetamodel.Attribute attributeClass then
+            if elementHelper.HasAttribute element attributeClass.Name then
+                let valueFromClass = CoreSemanticLayer.Element.attributeValue attributeClass "stringValue"
+                elementHelper.SetAttributeValue element attributeClass.Name valueFromClass
+            else
+                let attributeLink = attributeLink element.Class attributeClass
+                let attributeNode = element.Model.CreateNode(attributeClass.Name, attributeClass)
+                element.Model.CreateAssociation(attributeLink, element, attributeNode, attributeClass.Name) |> ignore
+
+                copySimpleAttribute elementHelper attributeNode attributeClass "stringValue"
+                copySimpleAttribute elementHelper attributeNode attributeClass "kind"
+                copySimpleAttribute elementHelper attributeNode attributeClass "isInstantiable"
         else
-            let attributeLink = attributeLink element.Class attributeClass
-            let attributeNode = model.CreateNode(attributeClass.Name, attributeClass)
-            model.CreateAssociation(attributeLink, element, attributeNode, attributeClass.Name) |> ignore
+            if elementHelper.HasAttribute element attributeClass.Name then
+                let valueFromClass = CoreSemanticLayer.Element.attributeValue attributeClass "stringValue"
+                elementHelper.SetAttributeValue element attributeClass.Name valueFromClass
+            else
+                let attributeLink = attributeLink element.Class attributeClass
+                let attributeNode = element.Model.CreateNode(attributeClass.Name, attributeClass.Class)
+                element.Model.CreateAssociation(attributeLink.Class, element, attributeNode, attributeClass.Name) |> ignore
 
-            copySimpleAttribute elementHelper attributeNode attributeClass "stringValue"
-            copySimpleAttribute elementHelper attributeNode attributeClass "kind"
-            copySimpleAttribute elementHelper attributeNode attributeClass "isInstantiable"
+                copySimpleAttribute elementHelper attributeNode attributeClass "stringValue"
+                copySimpleAttribute elementHelper attributeNode attributeClass "kind"
+                copySimpleAttribute elementHelper attributeNode attributeClass "isInstantiable"
 
-    /// Creates a new instance of a given class in a givn model, with default values for attributes.
+    /// Creates a new instance of a given class in a given model, with default values for attributes.
     let instantiate (elementHelper: ElementHelper) (model: IModel) (``class``: IElement) =
         if elementHelper.AttributeValue ``class`` "isAbstract" <> "false" then
             raise (InvalidSemanticOperationException "Trying to instantiate abstract node")
